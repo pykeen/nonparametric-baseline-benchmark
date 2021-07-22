@@ -100,8 +100,12 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
         kind="box",
         aspect=1.5,
     ).set(xscale="log", xlabel="Time (seconds)", ylabel="")
-    g.fig.savefig(BENCHMARK_DIRECTORY.joinpath("times.svg"))
-    g.fig.savefig(BENCHMARK_DIRECTORY.joinpath("times.png"), dpi=300)
+    if test:
+        times_stub = BENCHMARK_DIRECTORY.joinpath("test_times")
+    else:
+        times_stub = BENCHMARK_DIRECTORY.joinpath("times")
+    g.fig.savefig(times_stub.with_suffix(".svg"))
+    g.fig.savefig(times_stub.with_suffix(".png"), dpi=300)
     plt.close(g.fig)
 
     # Show adjusted AMR index plots. Surprisingly, some performance is really good.
@@ -113,8 +117,12 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
         kind="violin",
         aspect=1.5,
     ).set(xlabel="Adjusted Mean Rank Index", ylabel="")
-    g.fig.savefig(BENCHMARK_DIRECTORY.joinpath("aamri.svg"))
-    g.fig.savefig(BENCHMARK_DIRECTORY.joinpath("aamri.png"), dpi=300)
+    if test:
+        aamri_stub = BENCHMARK_DIRECTORY.joinpath("test_aamri")
+    else:
+        aamri_stub = BENCHMARK_DIRECTORY.joinpath("aamri")
+    g.fig.savefig(aamri_stub.with_suffix(".svg"))
+    g.fig.savefig(aamri_stub.with_suffix(".png"), dpi=300)
     plt.close(g.fig)
 
     # Make a violinplot grid showing relation between # triples and result, stratified by model and metric.
@@ -131,8 +139,12 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
         aspect=1.5,
     )
     g.set(ylabel="")
-    g.fig.savefig(BENCHMARK_DIRECTORY.joinpath("summary.svg"))
-    g.fig.savefig(BENCHMARK_DIRECTORY.joinpath("summary.png"), dpi=300)
+    if test:
+        summary_stub = BENCHMARK_DIRECTORY.joinpath("test_summary")
+    else:
+        summary_stub = BENCHMARK_DIRECTORY.joinpath("summary")
+    g.fig.savefig(summary_stub.with_suffix(".svg"))
+    g.fig.savefig(summary_stub.with_suffix(".png"), dpi=300)
     plt.close(g.fig)
 
 
