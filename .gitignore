@@ -3,3 +3,4 @@ results/test_*
 
 .venv
 runs/
+.DS_Store
