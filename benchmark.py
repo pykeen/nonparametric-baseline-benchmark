@@ -155,6 +155,7 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
         hue="model",
         col="metric",
         kind="bar",
+        sharex=False,
         col_wrap=2,
         height=0.5 * tsdf["dataset"].nunique(),
         aspect=1.5,
