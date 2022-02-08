@@ -2,34 +2,50 @@
 
 """Run the non-parametric baseline experiment."""
 
+import hashlib
 import itertools as itt
+import json
 import time
 from functools import partial
+from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any, List, Mapping, Optional, Sequence, Tuple, Type, Union, cast
 
 import click
 import pandas as pd
 from more_click import verbose_option
+from pykeen.datasets import Dataset, dataset_resolver
+from pykeen.evaluation import RankBasedEvaluator, RankBasedMetricResults
+from pykeen.models import Model, baseline
+from pykeen.models.baseline import EvaluationOnlyModel
+from pykeen.utils import resolve_device
 from tqdm import trange
 from tqdm.contrib.concurrent import process_map
 from tqdm.contrib.logging import logging_redirect_tqdm
-
-from pykeen.datasets import Dataset, dataset_resolver
-from pykeen.evaluation import RankBasedEvaluator, RankBasedMetricResults, evaluate
-from pykeen.models import Model
-from pykeen.models.baseline.models import (
-    EvaluationOnlyModel,
-    MarginalDistributionBaseline,
-)
 
 HERE = Path(__file__).parent.resolve()
 BENCHMARK_DIRECTORY = HERE.joinpath("results")
 BENCHMARK_DIRECTORY.mkdir(exist_ok=True, parents=True)
 BENCHMARK_PATH = BENCHMARK_DIRECTORY.joinpath("results.tsv")
 TEST_BENCHMARK_PATH = BENCHMARK_DIRECTORY.joinpath("test_results.tsv")
+RUNS_DIR = HERE.joinpath("runs")
+RUNS_DIR.mkdir(exist_ok=True, parents=True)
 KS = (1, 5, 10, 50, 100)
 METRICS = ["mrr", "iamr", "igmr", *(f"hits@{k}" for k in KS), "aamr", "aamri"]
+
+
+class Mixin:
+    @property
+    def device(self):
+        return resolve_device("cpu")
+
+
+class MarginalDistributionBaseline(Mixin, baseline.MarginalDistributionBaseline):
+    """A hack to fix the device getters."""
+
+
+class SoftInverseTripleBaseline(Mixin, baseline.SoftInverseTripleBaseline):
+    """A hack to fix the device getters."""
 
 
 @click.command()
@@ -65,13 +81,18 @@ def _melt(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _relabel_model(
-    model: str, entity_margin: Optional[bool], relation_margin: Optional[bool]
+    model: str,
+    entity_margin: Optional[bool],
+    relation_margin: Optional[bool],
+    threshold: Optional[float],
 ) -> str:
     rv = model
     if isinstance(entity_margin, bool):
         rv = f'{rv} {"/e" if entity_margin else ""}'
     if isinstance(relation_margin, bool):
         rv = f'{rv} {"/r" if relation_margin else ""}'
+    if threshold:
+        rv = f"{rv} ({threshold})"
     return rv
 
 
@@ -84,9 +105,9 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
 
     tsdf = _melt(df)
     tsdf["model"] = [
-        _relabel_model(model, entity_margin, relation_margin)
-        for model, entity_margin, relation_margin in tsdf[
-            ["model", "entity_margin", "relation_margin"]
+        _relabel_model(model, entity_margin, relation_margin, threshold)
+        for model, entity_margin, relation_margin, threshold in tsdf[
+            ["model", "entity_margin", "relation_margin", "threshold"]
         ].values
     ]
 
@@ -108,22 +129,22 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
     g.fig.savefig(times_stub.with_suffix(".png"), dpi=300)
     plt.close(g.fig)
 
-    # Show adjusted AMR index plots. Surprisingly, some performance is really good.
-    g = sns.catplot(
-        data=tsdf[tsdf.metric == "aamri"],
-        y="dataset",
-        x="value",
-        hue="model",
-        kind="violin",
-        aspect=1.5,
-    ).set(xlabel="Adjusted Mean Rank Index", ylabel="")
-    if test:
-        aamri_stub = BENCHMARK_DIRECTORY.joinpath("test_aamri")
-    else:
-        aamri_stub = BENCHMARK_DIRECTORY.joinpath("aamri")
-    g.fig.savefig(aamri_stub.with_suffix(".svg"))
-    g.fig.savefig(aamri_stub.with_suffix(".png"), dpi=300)
-    plt.close(g.fig)
+    for metric in ["aamri", "mrr", "iamr"]:
+        g = sns.catplot(
+            data=tsdf[tsdf.metric == metric],
+            y="dataset",
+            x="value",
+            hue="model",
+            kind="violin",
+            aspect=1.5,
+        ).set(xlabel=metric, ylabel="")
+        if test:
+            stub = BENCHMARK_DIRECTORY.joinpath(f"test_{metric}")
+        else:
+            stub = BENCHMARK_DIRECTORY.joinpath(metric)
+        g.fig.savefig(stub.with_suffix(".svg"))
+        g.fig.savefig(stub.with_suffix(".png"), dpi=300)
+        plt.close(g.fig)
 
     # Make a violinplot grid showing relation between # triples and result, stratified by model and metric.
     # Interpretation: no dataset size dependence
@@ -157,17 +178,8 @@ def _get_settings() -> List[Tuple[Type[EvaluationOnlyModel], Mapping[str, Any]]]
                 dict(entity_margin=entity_margin, relation_margin=relation_margin),
             )
         )
-
-    try:  # TODO remove this try/except when https://github.com/pykeen/pykeen/pull/543 is merged into master
-        from pykeen.models.baseline import SoftInverseTripleBaseline
-    except ImportError:
-        pass
-    else:
-        # TODO come up with better way of splitting results by multiple thresholds (or any arbitrary kwargs)
-        for threshold in [None]:
-            model_settings.append(
-                (SoftInverseTripleBaseline, dict(threshold=threshold))
-            )
+    for threshold in [None, 0.1, 0.3]:
+        model_settings.append((SoftInverseTripleBaseline, dict(threshold=threshold)))
 
     return model_settings
 
@@ -177,7 +189,7 @@ def _build(
 ) -> pd.DataFrame:
     datasets = sorted(dataset_resolver, key=Dataset.triples_sort_key)
     if test:
-        datasets = datasets[:4]
+        datasets = datasets[:5]
     else:
         # FB15K and CoDEx Large are the first datasets where this gets a bit out of hand
         datasets = datasets[: 1 + datasets.index(dataset_resolver.lookup("FB15k-237"))]
@@ -190,11 +202,13 @@ def _build(
         kwargs_keys=kwargs_keys,
         trials=trials,
     )
+    max_workers = cpu_count() // 2
     it = process_map(
         func,
         itt.product(datasets, model_settings),
         desc="Baseline",
         total=len(datasets) * len(model_settings),
+        max_workers=max_workers,
     )
     rows = list(itt.chain.from_iterable(it))
     columns = [
@@ -225,6 +239,13 @@ def _run_trials(
 
     model_name = model_cls.__name__[: -len("Baseline")]
     dataset_name = dataset_cls.__name__
+    kwargs_hash = hashlib.sha256(
+        json.dumps(model_kwargs, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:8]
+    path = RUNS_DIR.joinpath(f"{dataset_name}_{model_name}_{kwargs_hash}.json")
+    if path.exists():
+        return json.loads(path.read_text())
+
     dataset = dataset_cls()
     base_record = (
         dataset_name,
@@ -254,6 +275,7 @@ def _run_trials(
                 *(result.get_metric(metric) for metric in METRICS),
             )
         )
+    path.write_text(json.dumps(records, indent=2))
     return records
 
 
@@ -263,22 +285,20 @@ def _clean(x):
     return x
 
 
-def _evaluate_baseline(dataset: Dataset, model: Model, batch_size=None):
+def _evaluate_baseline(dataset: Dataset, model: Model, batch_size=None) -> RankBasedMetricResults:
     assert dataset.validation is not None
     evaluator = RankBasedEvaluator(ks=KS)
     return cast(
         RankBasedMetricResults,
-        evaluate(
+        evaluator.evaluate(
             model=model,
             mapped_triples=dataset.testing.mapped_triples,
-            evaluators=evaluator,
             batch_size=batch_size,
             additional_filter_triples=[
                 dataset.training.mapped_triples,
                 dataset.validation.mapped_triples,
             ],
-            use_tqdm=100_000
-            < dataset.training.num_triples,  # only use for big datasets
+            use_tqdm=100_000 < dataset.training.num_triples,  # only use for big datasets
         ),
     )
 
