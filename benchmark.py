@@ -202,13 +202,11 @@ def _build(
         kwargs_keys=kwargs_keys,
         trials=trials,
     )
-    max_workers = cpu_count() // 2
     it = process_map(
         func,
         itt.product(datasets, model_settings),
         desc="Baseline",
         total=len(datasets) * len(model_settings),
-        max_workers=max_workers,
     )
     rows = list(itt.chain.from_iterable(it))
     columns = [
