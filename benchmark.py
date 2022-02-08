@@ -91,7 +91,7 @@ def _relabel_model(
         rv = f'{rv} {"/e" if entity_margin else ""}'
     if isinstance(relation_margin, bool):
         rv = f'{rv} {"/r" if relation_margin else ""}'
-    if threshold:
+    if threshold and pd.notna(threshold):
         rv = f"{rv} ({threshold})"
     return rv
 
@@ -135,7 +135,7 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
             y="dataset",
             x="value",
             hue="model",
-            kind="violin",
+            kind="bar",
             aspect=1.5,
         ).set(xlabel=metric, ylabel="")
         if test:
@@ -146,7 +146,7 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
         g.fig.savefig(stub.with_suffix(".png"), dpi=300)
         plt.close(g.fig)
 
-    # Make a violinplot grid showing relation between # triples and result, stratified by model and metric.
+    # Make a grid showing relation between # triples and result, stratified by model and metric.
     # Interpretation: no dataset size dependence
     g = sns.catplot(
         data=tsdf[~tsdf.metric.isin({"aamr", "aamri"})],
@@ -154,7 +154,7 @@ def _plot(df: pd.DataFrame, skip_small: bool = True, test: bool = False) -> None
         x="value",
         hue="model",
         col="metric",
-        kind="violin",
+        kind="bar",
         col_wrap=2,
         height=0.5 * tsdf["dataset"].nunique(),
         aspect=1.5,
